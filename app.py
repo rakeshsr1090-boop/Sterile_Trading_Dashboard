@@ -9,35 +9,37 @@ import yfinance as yf
 # 1. CORE TECHNICAL INDICATORS PIPELINE
 # =====================================================================
 def calculate_indicators(df):
-    """Calculate the dashboard indicators from intraday market data."""
+    """Calculates all 5 strict mechanical checklist parameters precisely from live data."""
     df = df.sort_index().copy()
 
-    # Index feeds commonly return volume=0. In that case a volume-weighted
-    # VWAP is undefined, so use an equal-weighted session typical-price VWAP.
-    df['SMA_7'] = df['close'].rolling(window=7, min_periods=1).mean()
+    # Index feeds can return zero or missing volume. Replace it with 1 so
+    # session VWAP remains defined for index data such as ^NSEI/^NSEBANK.
+    if 'volume' in df.columns:
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').replace(0, 1).fillna(1)
+    else:
+        df['volume'] = 1.0
+
+    # A. Moving Averages
+    df['SMA_7'] = df['close'].rolling(window=7).mean()
     df['EMA_21'] = df['close'].ewm(span=21, adjust=False).mean()
 
+    # B. Intraday Session VWAP
     df['date_only'] = df.index.date
     typical_price = (df['high'] + df['low'] + df['close']) / 3
-    volume = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
-    volume = volume.clip(lower=0)
+    df['tp_vol'] = typical_price * df['volume']
 
-    # Use normal VWAP where volume exists. For zero-volume index data,
-    # use cumulative typical-price average so VWAP is still available.
-    weighted_volume = volume.where(volume > 0, 1.0)
-    df['tp_vol'] = typical_price * weighted_volume
     df['cum_tp_vol'] = df.groupby('date_only')['tp_vol'].cumsum()
-    df['cum_vol'] = df.groupby('date_only')[weighted_volume.name].cumsum()
+    df['cum_vol'] = df.groupby('date_only')['volume'].cumsum()
     df['VWAP'] = df['cum_tp_vol'] / df['cum_vol']
 
-    # RSI 14
+    # C. Relative Strength Index (RSI 14)
     delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=14, min_periods=1).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
     rs = gain / (loss + 1e-10)
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # MACD 12, 26, 9
+    # D. Moving Average Convergence Divergence (MACD 12, 26, 9)
     ema_12 = df['close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['close'].ewm(span=26, adjust=False).mean()
     df['MACD_Line'] = ema_12 - ema_26
@@ -121,7 +123,6 @@ if st.session_state.scanner_active:
                     df_live['ist_time'] = df_live.index.strftime('%Y-%m-%d %H:%M')
                     df_live.columns = [str(c).lower() for c in df_live.columns]
 
-                    # Use the same IST timezone for today's date comparison.
                     today_ist = pd.Timestamp.now(tz='Asia/Kolkata').date()
                     df_live = df_live[df_live.index.date == today_ist].sort_index()
 
@@ -141,7 +142,6 @@ if st.session_state.scanner_active:
                             st.table(pd.DataFrame(scorecard_rows))
                         with data_tables_placeholder.container():
                             st.subheader("🗂️ Today's 5-Minute Candlestick History (IST)")
-                            # Show the complete current-session history, not only tail(15).
                             display_columns = ['ist_time', 'open', 'high', 'low', 'close', 'SMA_7', 'EMA_21', 'VWAP', 'RSI', 'MACD_Histogram']
                             st.dataframe(df_processed[display_columns], use_container_width=True, height=600)
                     else:
