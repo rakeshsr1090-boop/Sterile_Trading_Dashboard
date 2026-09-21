@@ -96,7 +96,7 @@ def evaluate_entry_quality(df, symbol):
 # =====================================================================
 st.set_page_config(page_title="Automated Nifty Scanner", layout="wide")
 st.title("📈 Live Nifty Index Strategy Dashboard")
-st.caption("Observation-Only Engine. Pulling real-time market data across 5-minute candlestick intervals.")
+st.caption("Observation-Only Engine. Pulling real-time market data across 5-minute candlestick intervals with Timezone Correction.")
 
 # --- SIDEBAR INTERACTIVE DYNAMIC CONFIGURATION ---
 st.sidebar.header("🎯 Target Selection Settings")
@@ -116,10 +116,11 @@ if "scanner_active" not in st.session_state:
 col1, col2 = st.columns(2)
 with col1:
     if st.button("▶️ Launch Live 5-Min Monitor Loop", type="primary"):
-        st.session_state.scanner_active = True
+        st.session_state.session_state.scanner_active = True
 with col2:
     if st.button("🛑 Terminate Dashboard Session"):
         st.session_state.scanner_active = False
+        st.write("Scanner paused safely.")
 
 # Continuous Web Page Execution Core Loop
 if st.session_state.scanner_active:
@@ -136,47 +137,65 @@ if st.session_state.scanner_active:
             st.toast("⏰ Fetching fresh live market data frames from exchange...", icon="🔄")
             
             try:
-                # --- FETCH REAL INTRADAY DATA LIVE FROM EXCHANGE ---
-                df_raw = yf.download(tickers=TARGET_TICKER, period="1d", interval="5m")
+                # --- FETCH REAL LIVE DATA CONVERTED TO IST TIMEZONE ---
+                # Downloading a 5-day history ensures we capture today's open without timezone gaps
+                df_raw = yf.download(tickers=TARGET_TICKER, period="5d", interval="5m")
                 
                 if not df_raw.empty:
-                    # Clean multi-index headers if returned by yfinance pipeline
+                    # Clean up multi-index headers if returned by yfinance pipeline
                     if isinstance(df_raw.columns, pd.MultiIndex):
                         df_raw.columns = df_raw.columns.get_level_values(0)
                         
-                    # Standardize names for indicator function requirements
                     df_live = df_raw.copy()
+                    
+                    # 1. Force the index to treat its timestamps as native timezone data
+                    if df_live.index.tz is None:
+                        df_live.index = df_live.index.tz_localize('UTC')
+                        
+                    # 2. Explicitly convert the entire timeline to Indian Standard Time (IST)
+                    df_live.index = df_live.index.tz_convert('Asia/Kolkata')
+                    
+                    # 3. Create a clean string column for your data display layout
+                    df_live['ist_time'] = df_live.index.strftime('%Y-%m-%d %H:%M')
+                    
+                    # 4. Filter data to strictly isolate today's active live market session
+                    today_date = datetime.now().date()
+                    df_live = df_live[df_live.index.date == today_date]
+                    
+                    # Standardize names for indicator function requirements
                     df_live.index.name = 'datetime'
                     df_live.columns = [c.lower() for c in df_live.columns]
                     
-                    # Execute mathematical evaluation functions
-                    df_processed = calculate_indicators(df_live)
-                    eval_metrics = evaluate_entry_quality(df_processed, underlying)
+                    # Sort oldest to newest to ensure proper indicator accumulation math
+                    df_live = df_live.sort_index()
                     
-                    # Format layout data rows
-                    scorecard_rows = [{
-                        "Index Ticker": underlying,
-                        "Strategy Status Flag": eval_metrics["status"],
-                        "Distance Relative to VWAP": eval_metrics["pct"],
-                        "Live Close Price": f"₹{eval_metrics['price']:.2f}",
-                        "Session VWAP Level": f"₹{eval_metrics['vwap']:.2f}",
-                        "Tactical System Action": eval_metrics["action"]
-                    }]
-                    
-                    # --- RENDER REFRESHED TABLES ON SCREEN ---
-                    with scorecard_placeholder.container():
-                        st.markdown("### 📊 Live Strategy Entry Evaluation Board")
-                        st.table(pd.DataFrame(scorecard_rows))
+                    if not df_live.empty:
+                        # Execute mathematical evaluation functions
+                        df_processed = calculate_indicators(df_live)
+                        eval_metrics = evaluate_entry_quality(df_processed, underlying)
                         
-                    with data_tables_placeholder.container():
-                        st.subheader(f"🗂️ Historical Candlestick Raw Signal History")
-                        st.dataframe(df_processed[['open', 'high', 'low', 'close', 'SMA_7', 'EMA_21', 'VWAP', 'RSI', 'MACD_Histogram']].tail(10))
+                        # Format scorecard layout rows
+                        scorecard_rows = [{
+                            "Index Ticker": underlying,
+                            "Strategy Status Flag": eval_metrics["status"],
+                            "Distance Relative to VWAP": eval_metrics["pct"],
+                            "Live Close Price": f"₹{eval_metrics['price']:.2f}",
+                            "Session VWAP Level": f"₹{eval_metrics['vwap']:.2f}",
+                            "Tactical System Action": eval_metrics["action"]
+                        }]
+                        
+                        # --- RENDER REFRESHED TABLES ON SCREEN ---
+                        with scorecard_placeholder.container():
+                            st.markdown("### 📊 Live Strategy Entry Evaluation Board")
+                            st.table(pd.DataFrame(scorecard_rows))
+                            
+                        with data_tables_placeholder.container():
+                            st.subheader(f"🗂️ Historical Candlestick Raw Signal History (IST Time)")
+                            # Displaying with 'ist_time' ensures you see 09:15, 09:30 visually
+                            st.dataframe(df_processed[['ist_time', 'open', 'high', 'low', 'close', 'sma_7', 'ema_21', 'vwap', 'rsi', 'macd_histogram']].tail(15))
+                    else:
+                        st.warning("No data rows found for today's session yet. Stream will initialize as soon as market logs post.")
                 else:
                     st.error("Market feed failed to return data frames. Verifying server data stream pathways.")
             except Exception as e:
                 st.error(f"Error during calculations loop execution bounds: {e}")
-                
-            # Brief cooldown phase to ensure server registers call loop cleanly once within the target minute block
-            time.sleep(15)
-            
-        time.sleep(1)
