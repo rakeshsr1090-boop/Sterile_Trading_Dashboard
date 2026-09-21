@@ -116,7 +116,9 @@ if "scanner_active" not in st.session_state:
 col1, col2 = st.columns(2)
 with col1:
     if st.button("▶️ Launch Live 5-Min Monitor Loop", type="primary"):
-        st.session_state.session_state.scanner_active = True
+        # st.session_state is already the session-state object; do not access
+        # a nested, nonexistent st.session_state.session_state key.
+        st.session_state.scanner_active = True
 with col2:
     if st.button("🛑 Terminate Dashboard Session"):
         st.session_state.scanner_active = False
@@ -191,8 +193,9 @@ if st.session_state.scanner_active:
                             
                         with data_tables_placeholder.container():
                             st.subheader(f"🗂️ Historical Candlestick Raw Signal History (IST Time)")
-                            # Displaying with 'ist_time' ensures you see 09:15, 09:30 visually
-                            st.dataframe(df_processed[['ist_time', 'open', 'high', 'low', 'close', 'sma_7', 'ema_21', 'vwap', 'rsi', 'macd_histogram']].tail(15))
+                            # Indicator names are uppercase because calculate_indicators
+                            # creates them with uppercase keys.
+                            st.dataframe(df_processed[['ist_time', 'open', 'high', 'low', 'close', 'SMA_7', 'EMA_21', 'VWAP', 'RSI', 'MACD_Histogram']].tail(15))
                     else:
                         st.warning("No data rows found for today's session yet. Stream will initialize as soon as market logs post.")
                 else:
